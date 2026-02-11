@@ -3,7 +3,7 @@ import jax as jx
 from scipy.special import genlaguerre
 from matplotlib import pyplot as plt
 import keras
-from keras.models import Sequential
+from keras.models import Sequential, Model
 import jax.numpy as jnp
 
 lay = keras.layers
@@ -84,9 +84,10 @@ def lg_mode_indices(max_order=4):
     return modes
 
 
-MODES = lg_mode_indices(4)
-N_MODES = len(MODES)
-print("Number of modes:", N_MODES)
+ORDER = 4
+MODES = lg_mode_indices(ORDER)
+N_COEFF = len(MODES)
+print("Number of modes:", N_COEFF)
 
 
 def make_grid(N=32):
@@ -133,7 +134,7 @@ def generate_dataset(N_samples=5000, n_res=32):
     X : np.ndarray
         Phase images of shape (N_samples, n_res, n_res, 1) in radians.
     Y : np.ndarray
-        Flattened complex coefficients of shape (N_samples, 2*N_MODES),
+        Flattened complex coefficients of shape (N_samples, 2*N_COEFF),
         where real and imaginary parts are interleaved.
 
     Notes
@@ -141,16 +142,15 @@ def generate_dataset(N_samples=5000, n_res=32):
     Coefficients are normalized to unit total power (sum of |c|^2 = 1).
     Uses global coordinate grids r, theta for phase synthesis.
     """
-    X = np.zeros((N_samples, n_res, n_res, 1))
-    Y = np.zeros((N_samples, 2 * N_MODES))
+    X = np.zeros((N_samples, n_res, n_res, 1), dtype=np.float32)
+    Y = np.zeros((N_samples, 2 * N_COEFF), dtype=np.float32)
 
     for i in range(N_samples):
-        coeffs = (np.random.randn(N_MODES) + 1j * np.random.randn(N_MODES)) * 0.3
+        coeffs = np.random.randn(N_COEFF) + 1j * np.random.randn(N_COEFF)
 
-        # --- normalize coefficients to unit total power ---
         coeffs /= np.sqrt(np.sum(np.abs(coeffs) ** 2))
 
-        phase = synthesize_phase(coeffs)
+        phase = synthesize_phase(np.stack([coeffs.real, coeffs.imag], axis=1).ravel())
 
         X[i, ..., 0] = phase
         Y[i, 0::2] = coeffs.real
@@ -262,7 +262,177 @@ class JAXL2Norm(lay.Layer):
         return config
 
 
-model = Sequential(
+import jax
+import jax.numpy as jnp
+from jax.scipy.special import gammaln  # for generalized Laguerre
+
+
+# --- LG mode indices ---
+MODES = [(p, l) for p in range(5) for l in range(-4, 5) if 2 * p + abs(l) <= 4]
+
+
+# --- Generalized Laguerre polynomial using explicit formula ---
+
+
+class LGPhaseLayer(lay.Layer):
+
+    def __init__(self, order=4, n_res=32, **kwargs):
+        super().__init__(**kwargs)
+        self.modes = lg_mode_indices(order)
+        self.n_res = n_res
+        self.r, self.theta = self.make_grid(n_res)
+
+    def make_grid(self, n_res=32):
+        x = jnp.linspace(-2, 2, n_res)
+        y = jnp.linspace(-2, 2, n_res)
+        X, Y = jnp.meshgrid(x, y)
+        r = jnp.sqrt(X**2 + Y**2)
+        theta = jnp.arctan2(Y, X)
+        return r, theta
+
+    def gen_laguerre(self, p, l, x):
+        """L_p^l(x) using explicit formula"""
+
+        def comb(N, k):
+            return jnp.exp(gammaln(N + 1) - gammaln(k + 1) - gammaln(N - k + 1))
+
+        coeffs = jnp.array(
+            [
+                ((-1) ** m * comb(p + l, p - m) / jax.scipy.special.factorial(m))
+                for m in range(p + 1)
+            ]
+        )
+        powers = jnp.array([x**m for m in range(p + 1)])
+
+        return jnp.sum(coeffs[:, jnp.newaxis, jnp.newaxis] * powers, axis=0)
+
+    def lg_mode_jax(self, p, l, r, theta):
+        l_abs = jnp.abs(l)
+        L = self.gen_laguerre(p, l_abs, 2 * r**2)
+        amp = (r**l_abs) * jnp.exp(-(r**2)) * L
+        phase = jnp.exp(1j * l * theta)
+        return amp * phase
+
+    def synthesize_phase_jax_batch(self, coeffs_real):
+        """
+        coeffs_batch: shape (batch, N_COEFF), complex64 or complex128
+        returns: phase images, shape (batch, H, W)
+        """
+        coeffs = coeffs_real[:, 0::2] + 1j * coeffs_real[:, 1::2]
+
+        LG_modes = jnp.stack(
+            [self.lg_mode_jax(p, l, self.r, self.theta) for (p, l) in self.modes],
+            axis=0,
+        )  # (N_COEFF, H, W)
+
+        coeffs = coeffs[:, :, None, None]  # (B, N_COEFF, 1, 1)
+
+        E = jnp.sum(coeffs * LG_modes[None, ...], axis=1)
+
+        return jnp.angle(E)
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0], self.n_res, self.n_res)
+
+    def compute_output_spec(self, input_spec):
+        return keras.KerasTensor(
+            shape=(input_spec.shape[0], self.n_res, self.n_res), dtype="float32"
+        )
+
+    def call(self, inputs):
+        # coeffs: tf.Tensor, shape (batch, N_COEFF), dtype float32 or complex64
+        return self.synthesize_phase_jax_batch(inputs)
+
+
+inp = lay.Input(shape=(32, 32, 1), name="input_phase_image")
+x = lay.Conv2D(64, 3, activation="elu", padding="same")(inp)
+x = lay.Conv2D(64, 3, activation="elu", padding="same")(x)
+x = lay.AvgPool2D((2, 2))(x)
+x = lay.Conv2D(128, 3, activation="elu", padding="same")(x)
+x = lay.Conv2D(128, 3, activation="elu", padding="same")(x)
+x = lay.AvgPool2D((2, 2))(x)
+x = lay.Conv2D(128, 3, activation="elu", padding="same")(x)
+x = lay.GlobalAveragePooling2D()(x)
+x = lay.Dense(128, activation="elu")(x)
+x = lay.Dropout(0.3)(x)
+x = lay.Dense(2 * N_COEFF)(x)
+coeffs = JAXL2Norm(name="coeffs")(x)
+out_image = LGPhaseLayer(order=ORDER, n_res=32, name="rec_phase_image")(coeffs)
+
+phase_model = Model(inputs=inp, outputs={"out_image": out_image, "coeffs": coeffs})
+# phase_model = Model(inputs=inp, outputs=out_image)
+
+
+def complex_mse(y_true, y_pred):
+    return jnp.square(jnp.abs(y_true - y_pred)).mean()
+
+
+phase_model.compile(
+    optimizer="adam",
+    loss={"out_image": "mse", "coeffs": "mse"},
+    loss_weights={"out_image": 0.0, "coeffs": 1.0},
+)
+
+phase_model.summary()
+
+
+phase_model.fit(
+    X_train,
+    {"out_image": X_train, "coeffs": Y_train},
+    validation_split=0.1,
+    epochs=10,
+    batch_size=64,
+)
+
+
+# pick one validation example
+phase_reco = phase_model.predict(X_val[:])
+
+print(phase_reco["coeffs"].dtype)
+
+
+for i in range(3):
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3))
+    axes = axes.ravel()
+    phase = X_val[i, ..., 0]
+    coeffs_val = Y_val[i, 0::2] + 1j * Y_val[i, 1::2]
+
+    plot_image(phase, coeffs_val, axes[0], fig)
+    axes[0].set_title("input image")
+    rec_image, coeff_rec = phase_reco["out_image"][i], phase_reco["coeffs"][i]
+    coeff_rec = coeff_rec[0::2] + 1j * coeff_rec[1::2]
+    plot_image(rec_image, coeff_rec, axes[1], fig)
+    axes[1].set_title("predicted image")
+    plt.tight_layout()
+plt.show()
+
+
+
+
+coeffs_pred = phase_reco["coeffs"]
+
+for i in range(3):
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3))
+    axes = axes.ravel()
+    phase = X_val[i, ..., 0]
+    coeffs = Y_val[i, 0::2] + 1j * Y_val[i, 1::2]
+    plot_image(phase, coeffs, axes[0], fig)
+    axes[0].set_title("input image")
+
+    c_pred = coeffs_pred[i, 0::2] + 1j * coeffs_pred[i, 1::2]
+    phase_reco__ = synthesize_phase(c_pred)
+    plot_image(phase_reco__, c_pred, axes[1], fig)
+    axes[1].set_title("predicted image")
+    plt.tight_layout()
+
+plt.show()
+plt.close("all")
+
+# ################
+# Train mode model
+# ################
+
+mode_model = Sequential(
     [
         lay.Input(shape=(32, 32, 1)),
         lay.Conv2D(64, 3, activation="elu", padding="same"),
@@ -275,24 +445,27 @@ model = Sequential(
         lay.GlobalAveragePooling2D(),
         lay.Dense(128, activation="elu"),
         lay.Dropout(0.3),
-        lay.Dense(2 * N_MODES),
-        JAXL2Norm(),
+        lay.Dense(2 * N_COEFF),
+        JAXL2Norm(name="coeffs")
     ]
 )
 
-model.compile(
+mode_model.compile(
     optimizer="adam",
     loss="mse",
 )
 
-model.summary()
+
+mode_model.summary()
 
 
-model.fit(X_train, Y_train, validation_data=(X_val, Y_val), epochs=10, batch_size=64)
+mode_model.fit(
+    X_train, Y_train, validation_split=0.1, epochs=10, batch_size=64
+)
 
 
 # pick one validation example
-coeffs_pred = model.predict(X_val[:])
+coeffs_pred = mode_model.predict(X_val[:])
 # coeffs_pred = Y_val
 
 
@@ -300,7 +473,7 @@ for i in range(5):
     fig, axes = plt.subplots(1, 2, figsize=(7, 3))
     axes = axes.ravel()
     phase = X_val[i, ..., 0]
-    coeffs = Y_val[i, 0::2] + 1j * Y_val[i, 1::2]
+    coeffs = Y_val
     plot_image(phase, coeffs, axes[0], fig)
     axes[0].set_title("input image")
 
@@ -312,4 +485,3 @@ for i in range(5):
 
 
 plt.show()
-plt.close("all")
