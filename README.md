@@ -18,13 +18,13 @@ The models successfully learn to decompose complex phase patterns into their con
 
 ### Coefficient-Based Reconstruction
 Coefficient prediction with external reconstruction. Shown image is generated using scipy.
-![Coefficient Reconstruction Example (supervised)](coeff_example_0.png)
+![Coefficient Reconstruction Example (supervised)](figs/coeff_example_0.png)
 
 
 ### Phase Model Reconstruction
 Direct image-to-image reconstruction with embedded LG synthesis. Predicted image is generated using jax layer.
 
-![Phase Model Example (unsupervised)](pred_example_phase_model_0.png)
+![Phase Model Example (unsupervised)](figs/pred_example_phase_model_0.png)
 
 
 
