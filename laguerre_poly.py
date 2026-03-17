@@ -10,6 +10,8 @@ from jax.scipy.special import gammaln, factorial  # for generalized Laguerre
 from keras.models import Sequential, Model
 from matplotlib import pyplot as plt
 from scipy.special import genlaguerre
+from keras.optimizers import Adam
+
 
 lay = keras.layers
 
@@ -453,8 +455,6 @@ mode_model = Sequential(
         JAXL2Norm(name="coeffs"),
     ]
 )
-
-from keras.optimizers import Adam
 
 opt = Adam(1e-4, amsgrad=True)
 

@@ -62,7 +62,7 @@ else:
 
 project_root = dirname(realpath(__file__))
 relative_file_dir = os.path.relpath(dirname(realpath(parsed.file)), project_root)
-folder = relative_file_dir if relative_file_dir != "." else "root"
+folder = relative_file_dir if relative_file_dir != "." else "fast_laguerre"
 
 out_dir = str(join(work_dir, "jobs", folder))
 os.makedirs(out_dir, exist_ok=True)
