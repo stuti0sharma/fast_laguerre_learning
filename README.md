@@ -46,7 +46,15 @@ Direct image-to-image reconstruction with embedded LG synthesis. Predicted image
 - **CUDA Toolkit**: 13
 - **cuDNN**: 9
 
+
 ### Using the Environment File (Recommended)
+
+We recommend using mambaforge (Python 3.10) for fast environment management.
+Make sure to set the path of mamba installation to a reasonable directory (YOUR HOME DIRECTORY / since NHR@Alex has problems with $WORK), e.g., create a software folder and install mamba to $HOME/software.
+
+
+Install mambaforge in your home directory (avoid $WORK on NHR@Alex).
+
 
 The `environment.yaml` file defines the full conda environment with all dependencies pinned. To create and activate the environment:
 
