@@ -49,7 +49,7 @@ Direct image-to-image reconstruction with embedded LG synthesis. Predicted image
 
 ### Using the Environment File (Recommended)
 
-We recommend using mambaforge (Python 3.10) for fast environment management.
+We recommend using mambaforge (Python 3.14) for fast environment management.
 Make sure to set the path of mamba installation to a reasonable directory (YOUR HOME DIRECTORY / since NHR@Alex has problems with $WORK), e.g., create a software folder and install mamba to $HOME/software.
 
 
@@ -69,23 +69,10 @@ conda activate laguerre_learning
 conda info --envs
 ```
 
-To update an existing environment if `environment.yaml` changes:
+To set you CONDA prefix path (for GPU support). Run after creating the environment
 
-```bash
-conda env update -f environment.yaml --prune
 ```
-
-To export your current environment state (e.g., after adding packages):
-
-```bash
-conda env export > environment.yaml
-```
-
-To remove the environment:
-
-```bash
-conda deactivate
-conda env remove -n laguerre_learning
+source install.sh
 ```
 
 ### Manual Installation
