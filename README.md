@@ -139,3 +139,17 @@ This will:
 - Default: 3 epochs (extendable via `epochs` parameter)
 - Models use ELU activations throughout
 - Coefficient normalization ensures unit total power (∑|c|² = 1)
+
+## Code Organization
+
+This repository supports two ways to interact with the Laguerre-Gaussian learning models:
+
+### 1. Modular Pipeline (Recommended for Collaboration)
+The core functionality is broken down into dedicated scripts for better reusability:
+* `data_utils.py`: Contains mathematical definitions for LG modes, grid creation, and dataset generation/loading.
+* `model.py`: Defines the Keras model architectures, custom `JAXL2Norm` layer, and custom `phase_invariant_mse` loss.
+* `train.py`: The execution script to load data, toggle standard/custom loss, train the model, and save the weights.
+* `evaluate.py`: Loads the trained model and generates visual diagnostic dashboards.
+
+### 2. All-in-One Playground
+* `test_mode_model.py`: This script combines all data generation, model building, training, and evaluation steps into a single, standalone file. Ideal for quick experimentation and debugging.
